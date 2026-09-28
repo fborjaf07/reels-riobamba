@@ -8,7 +8,7 @@ const store = $getWorkflowStaticData('global');
 const H = this.helpers;
 const TG = `https://api.telegram.org/bot${cfg.tgToken}`;
 const REPO = cfg.githubRepo || 'fborjaf07/reels-riobamba';
-const WEBHOOK = cfg.reelWebhook || '__REEL_WEBHOOK__';
+const WEBHOOK = cfg.reelWebhook || 'https://betoborja07.app.n8n.cloud/webhook/reel-listo-569028c8af58edbc';
 const G = `https://graph.facebook.com/${cfg.graphVersion || 'v23.0'}`;
 const GI = `https://graph.instagram.com/${cfg.graphVersion || 'v23.0'}`;
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));

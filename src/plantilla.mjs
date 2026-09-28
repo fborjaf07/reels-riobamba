@@ -50,7 +50,7 @@ export function construirHTML(d) {
     }
     const f = e.foto;
     const cam = camara(f, i);
-    const oscuro = e.tipo === "atendida" ? "shade full" : "shade";
+    const oscuro = e.tipo === "atendida" && (d.atendida?.calles || []).length ? "shade full" : "shade";
     let cuerpo = "";
     const s = e.t;
 
@@ -94,11 +94,11 @@ export function construirHTML(d) {
     if (e.tipo === "atendida") {
       const a = d.atendida;
       cuerpo = `
-        <div class="list-wrap">
-          <div class="count-l" id="a1" style="font-size:80px;opacity:.9">Atendimos la</div>
+        <div class="list-wrap"${(a.calles || []).length ? "" : ' style="top:1040px"'}>
+          <div class="count-l" id="a1" style="font-size:80px;opacity:.9">${esc(a.frase || "Atendimos la")}</div>
           <div class="count" id="a2" style="font-size:158px;text-transform:uppercase">Plataforma ${esc(a.plataforma)}</div>
           ${a.sector ? `<div class="sdesc" id="a3" style="margin-top:8px">${esc(a.sector)}</div>` : ""}
-          <ul id="streets">${(a.calles || []).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>
+          ${(a.calles || []).length ? `<ul id="streets">${a.calles.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
         </div>`;
       up("#a1", s + 0.1, 40);
       anim("#a2", { scale: 0.4, opacity: 0, transformOrigin: "0% 100%" }, { scale: 1, opacity: 1, duration: 0.45, ease: "back.out(2)" }, s + 0.3);
