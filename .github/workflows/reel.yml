@@ -1,0 +1,96 @@
+name: Fabricar Reel
+
+# Lo dispara n8n (bot @Publicador_beto_bot) con los datos del día.
+on:
+  workflow_dispatch:
+    inputs:
+      datos:
+        description: "JSON con fotos, pasos, plataforma atendida, calles y próxima plataforma"
+        required: true
+      callback:
+        description: "URL (webhook de n8n) que recibe el resultado"
+        required: false
+        default: ""
+
+concurrency:
+  group: reels
+  cancel-in-progress: false
+
+env:
+  CLOUDINARY_CLOUD: r2a9ouxk
+  CLOUDINARY_PRESET: redes_unsigned
+
+jobs:
+  reel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar
+        run: |
+          npm ci
+          npx hyperframes browser ensure
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Preparar fotos y textos
+        env:
+          REEL_DATA: ${{ inputs.datos }}
+        run: |
+          echo "$REEL_DATA" > datos.json
+          node -e "const d=require('./datos.json');console.log('ID:',d.id||'(sin id)')"
+          node src/construir.mjs datos.json
+
+      - name: Renderizar
+        run: |
+          mkdir -p salida
+          cd plantilla && npx hyperframes render --output ../salida/bruto.mp4 --fps 30
+
+      - name: Optimizar para Instagram, Facebook y Telegram
+        run: |
+          ffmpeg -y -v error -i salida/bruto.mp4 -c:v libx264 -preset slow -crf 21 -pix_fmt yuv420p \
+            -profile:v high -level 4.1 -r 30 -c:a aac -b:a 128k -ar 48000 -movflags +faststart salida/reel.mp4
+          ls -la salida
+
+      - name: Subir a Cloudinary
+        id: subir
+        run: |
+          ID=$(node -e "const d=require('./datos.json');const s=(d.id||'reel')+'-'+Date.now();console.log(s.replace(/[^a-zA-Z0-9_-]/g,'-'))")
+          R=$(curl -sS -X POST "https://api.cloudinary.com/v1_1/$CLOUDINARY_CLOUD/video/upload" \
+            -F "file=@salida/reel.mp4" -F "upload_preset=$CLOUDINARY_PRESET" -F "folder=reels" -F "public_id=$ID")
+          URL=$(echo "$R" | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{const j=JSON.parse(s);if(!j.secure_url){console.error(s);process.exit(1)}console.log(j.secure_url)})")
+          DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 salida/reel.mp4)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "duracion=$DUR" >> "$GITHUB_OUTPUT"
+          echo "Reel: $URL"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reel
+          path: salida/reel.mp4
+          retention-days: 7
+
+      - name: Avisar a n8n
+        if: ${{ success() && inputs.callback != '' }}
+        env:
+          CALLBACK: ${{ inputs.callback }}
+          URL: ${{ steps.subir.outputs.url }}
+          DUR: ${{ steps.subir.outputs.duracion }}
+        run: |
+          ID=$(node -e "console.log(require('./datos.json').id||'')")
+          curl -sS -X POST "$CALLBACK" -H "Content-Type: application/json" \
+            -d "{\"ok\":true,\"id\":\"$ID\",\"video_url\":\"$URL\",\"duracion\":$DUR,\"run\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}"
+
+      - name: Avisar error a n8n
+        if: ${{ failure() && inputs.callback != '' }}
+        env:
+          CALLBACK: ${{ inputs.callback }}
+        run: |
+          ID=$(node -e "try{console.log(require('./datos.json').id||'')}catch(e){console.log('')}")
+          curl -sS -X POST "$CALLBACK" -H "Content-Type: application/json" \
+            -d "{\"ok\":false,\"id\":\"$ID\",\"run\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}"

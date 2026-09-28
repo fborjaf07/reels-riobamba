@@ -1,0 +1,19 @@
+{
+  "id": "ejemplo-plataforma-m",
+  "tema": { "linea1": "Bacheo de", "linea2": "la semana" },
+  "etiqueta": "Escuadrón Panal en acción",
+  "portada": "ejemplos/fotos/p2-colocacion.jpg",
+  "pasos": [
+    { "foto": "ejemplos/fotos/p1-fresado.jpg", "titulo": "Fresado", "texto": "Retiramos el asfalto dañado" },
+    { "foto": "ejemplos/fotos/p3-distribucion.jpg", "titulo": "Asfalto", "texto": "Colocamos y nivelamos la mezcla" },
+    { "foto": "ejemplos/fotos/p4-compactacion.jpg", "titulo": "Compactación", "texto": "El rodillo deja la vía lista" }
+  ],
+  "equipo": { "foto": "ejemplos/fotos/p5-equipo.jpg" },
+  "atendida": {
+    "plataforma": "M",
+    "foto": "ejemplos/fotos/p6-resultado.jpg",
+    "calles": ["Calle México", "Calle Carabobo", "Calle Luz Elisa Borja", "Calle Pichincha", "Calle Chimborazo", "Calle Vicente Rocafuerte", "Av. Cordovez"]
+  },
+  "proxima": { "plataforma": "C", "sector": "Sector Hospital Andino", "foto": "ejemplos/fotos/p7-cuadrilla.jpg" },
+  "hashtag": "#RiobambaEnConstrucción"
+}

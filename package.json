@@ -1,0 +1,14 @@
+{
+  "name": "reels-riobamba",
+  "private": true,
+  "type": "module",
+  "description": "Fábrica de Reels · Riobamba en Construcción",
+  "scripts": {
+    "construir": "node src/construir.mjs",
+    "render": "cd plantilla && hyperframes render --output ../salida/reel.mp4 --fps 30"
+  },
+  "dependencies": {
+    "hyperframes": "0.8.80",
+    "sharp": "^0.34.0"
+  }
+}
