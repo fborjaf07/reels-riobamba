@@ -60,7 +60,7 @@ const autorizado = (id) => (cfg.usuariosAutorizados || []).map(String).includes(
 
 // ---------- Botones del Reel ----------
 const cq = u.callback_query;
-if (cq && /^r(pub|no):/.test(cq.data || '')) {
+if (cq && /^r(pub|no|ig):/.test(cq.data || '')) {
   const [accion, id] = cq.data.split(':');
   const chat = cq.message?.chat?.id;
   if (!autorizado(cq.from?.id)) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'No autorizado' }); return []; }
@@ -74,39 +74,65 @@ if (cq && /^r(pub|no):/.test(cq.data || '')) {
     await decir(chat, '🗑️ Reel descartado.');
     return [];
   }
+  const tk = store.igTok?.valor || cfg.igToken;
+  const t0 = Date.now();
+  // Espera a que Instagram procese el video sin pasar el límite de 60 s de n8n
+  const esperarIG = async (cont) => {
+    while (Date.now() - t0 < 38000) {
+      const s = await http({ url: `${GI}/${cont}`, qs: { fields: 'status_code,status', access_token: tk } });
+      if (s.status_code === 'FINISHED') return 'ok';
+      if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') throw new Error(`Instagram no pudo procesar el video (${s.status || s.status_code})`);
+      await dormir(4000);
+    }
+    return 'pendiente';
+  };
+  const publicarIG = async () => {
+    const p = await post(`${GI}/${cfg.igUserId}/media_publish`, { creation_id: r.igCont, access_token: tk });
+    let link = '';
+    try { link = (await http({ url: `${GI}/${p.id}`, qs: { fields: 'permalink', access_token: tk } })).permalink || ''; } catch (e) {}
+    r.igListo = true;
+    return `✅ Instagram: publicado ${link}`.trim();
+  };
+  const botonIG = { reply_markup: { inline_keyboard: [[{ text: '📤 Terminar publicación en Instagram', callback_data: `rig:${id}` }]] } };
+
+  // Botón "Terminar Instagram"
+  if (accion === 'rig') {
+    if (r.igListo || !r.igCont) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Instagram ya está listo' }); await quitarBotones(); return []; }
+    await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Revisando Instagram…' });
+    await quitarBotones();
+    try {
+      const est = await esperarIG(r.igCont);
+      if (est === 'ok') await decir(chat, await publicarIG());
+      else await decir(chat, '⏳ Instagram todavía está procesando el video. Prueba en un minuto.', botonIG);
+    } catch (e) { await decir(chat, `❌ Instagram: ${errMsg(e)}`); }
+    return [];
+  }
+
   if (r.estado === 'publicando' || r.estado === 'publicado') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ya se está publicando' }); return []; }
   r.estado = 'publicando';
   await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Publicando…' });
   await quitarBotones();
-  await decir(chat, '⏳ Publicando el Reel en Instagram y Facebook… (1–3 min)');
+  await decir(chat, '⏳ Publicando el Reel en Facebook e Instagram…');
 
   const res = [];
-  // Instagram · Reel
-  try {
-    const tk = store.igTok?.valor || cfg.igToken;
-    const c = await post(`${GI}/${cfg.igUserId}/media`, { media_type: 'REELS', video_url: r.video, caption: r.instagram, share_to_feed: 'true', access_token: tk });
-    let estado = '';
-    for (let i = 0; i < 40; i++) {
-      await dormir(6000);
-      const s = await http({ url: `${GI}/${c.id}`, qs: { fields: 'status_code,status', access_token: tk } });
-      estado = s.status_code;
-      if (estado === 'FINISHED') break;
-      if (estado === 'ERROR' || estado === 'EXPIRED') throw new Error(`Instagram no pudo procesar el video (${s.status || estado})`);
-    }
-    if (estado !== 'FINISHED') throw new Error('Instagram tardó demasiado en procesar el video');
-    const p = await post(`${GI}/${cfg.igUserId}/media_publish`, { creation_id: c.id, access_token: tk });
-    let link = '';
-    try { link = (await http({ url: `${GI}/${p.id}`, qs: { fields: 'permalink', access_token: tk } })).permalink || ''; } catch (e) {}
-    res.push(`✅ Instagram: publicado ${link}`.trim());
-  } catch (e) { res.push(`❌ Instagram: ${errMsg(e)}`); }
-  // Facebook · video en la Página
+  let igPendiente = false;
+  // Facebook · video en la Página (rápido: Facebook lo procesa por su cuenta)
   try {
     const f = await post(`${G}/${cfg.pageId}/videos`, { file_url: r.video, description: r.facebook, access_token: cfg.pageToken });
     res.push(`✅ Facebook: publicado https://www.facebook.com/${f.id}`);
   } catch (e) { res.push(`❌ Facebook: ${errMsg(e)}`); }
+  // Instagram · Reel (se crea y, si tarda, queda un botón para terminar)
+  try {
+    const c = await post(`${GI}/${cfg.igUserId}/media`, { media_type: 'REELS', video_url: r.video, caption: r.instagram, share_to_feed: true, access_token: tk });
+    r.igCont = c.id;
+    const est = await esperarIG(c.id);
+    if (est === 'ok') res.push(await publicarIG());
+    else { igPendiente = true; res.push('⏳ Instagram: el video se está procesando.'); }
+  } catch (e) { res.push(`❌ Instagram: ${errMsg(e)}`); }
 
-  r.estado = res.some((x) => x.startsWith('✅')) ? 'publicado' : 'listo';
+  r.estado = res.some((x) => x.startsWith('✅')) || igPendiente ? 'publicado' : 'listo';
   await decir(chat, `${res.join('\n')}\n\n📲 TikTok: descarga el video de arriba y súbelo desde la app con este texto:\n${r.tiktok || ''}`);
+  if (igPendiente) await decir(chat, 'Cuando pase un minuto, pulsa el botón para terminar Instagram:', botonIG);
   return [];
 }
 
@@ -131,7 +157,7 @@ if (!/^\/reel\b/i.test(txt)) return pasar();
 
 // ======================= 3) /reel → armar el video =======================
 const AYUDA = `🎬 *Cómo pedir un Reel*
-1. Envía 3 a 8 fotos de la jornada.
+1. Envía 3 a 6 fotos de la jornada (como fotos, no como archivo).
 2. Escribe /reel seguido de los datos, por ejemplo:
 
 /reel Bacheo en la Plataforma M: calles México, Carabobo, Luz Elisa Borja y Av. Cordovez. Hicimos fresado, asfalto y compactación. Próxima: Plataforma C, sector Hospital Andino.
@@ -150,10 +176,10 @@ if (!datosTxt) { await decir(chat, AYUDA, { parse_mode: 'Markdown' }); return []
 if (lista.length < 3) { await decir(chat, `📷 Necesito al menos 3 fotos recientes para el Reel (tengo ${lista.length}). Envíalas y repite /reel.`); return []; }
 if (!cfg.githubToken) { await decir(chat, '⚠️ Falta configurar githubToken en el nodo Config para poder armar Reels.'); return []; }
 
-await decir(chat, `🎬 Armando tu Reel con ${Math.min(lista.length, 8)} fotos… te aviso en unos 3 minutos.`);
+await decir(chat, `🎬 Armando tu Reel con ${Math.min(lista.length, 6)} fotos… te aviso en unos 3 minutos.`);
 try {
   // 1. Fotos ya subidas (las 8 más recientes)
-  const fotos = lista.slice(-8).map((x) => x.url);
+  const fotos = lista.slice(-6).map((x) => x.url);
 
   // 2. Claude ordena los datos, elige qué foto va en cada escena y redacta los textos
   const system = `${cfg.estilo || ''}
@@ -175,7 +201,7 @@ Reglas:
 - plataforma: solo la letra o nombre tal como lo dan (ej. "M"). Si no hay próxima plataforma en los datos, "proxima": null.
 - Textos en español de Ecuador, dirigidos a jóvenes de 12 a 24 años, siempre con "ustedes". instagram: gancho + 60–120 palabras + 8–15 hashtags (incluye #RiobambaEnConstrucción). facebook: 80–150 palabras, máx. 3 hashtags. tiktok: máx. 150 caracteres con 3–5 hashtags.
 - No inventes cifras, fechas, nombres ni lugares. Si algo es ambiguo, anótalo en "dudas".`;
-  const content = fotos.map((url) => ({ type: 'image', source: { type: 'url', url: url.replace('/upload/', '/upload/w_900,f_jpg/') } }));
+  const content = fotos.map((url) => ({ type: 'image', source: { type: 'url', url: url.replace('/upload/', '/upload/w_700,q_auto,f_jpg/') } }));
   content.push({ type: 'text', text: `Datos del día:\n${datosTxt}` });
   const ai = await paso('Claude', http({
     method: 'POST', url: 'https://api.anthropic.com/v1/messages',
