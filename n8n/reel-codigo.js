@@ -27,6 +27,7 @@ const tagReel = (from) => `reel_${from}`;
 store.reels = store.reels || {};
 store.reelCorte = store.reelCorte || {};
 store.videoPend = store.videoPend || {};
+store.videoUlt = store.videoUlt || {};
 
 // Muestra los textos del Reel con los botones Publicar / Descartar
 const enviarBorrador = async (id) => {
@@ -74,9 +75,12 @@ ${REGLAS_TEXTOS}`;
 const prepararVideo = async (v, datos, chat, from) => {
   const fr = (pct) => `https://res.cloudinary.com/${cfg.cloudinaryCloud}/video/upload/so_${pct}p,w_700,q_auto,f_jpg/${v.publicId}.jpg`;
   const j = await paso('Claude', redactar([fr(15), fr(50), fr(85)], datos, 'un video (Reel) ya editado; recibes tres cuadros del video'));
-  const id = 'v' + Date.now().toString(36);
+  const id = 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
   store.reels[id] = { t: Date.now(), chat, from, estado: 'listo', video: v.url, instagram: j.instagram, facebook: j.facebook, tiktok: j.tiktok, dudas: j.dudas || [] };
+  // Recordar el video: un texto que llegue después se toma como corrección de este borrador
+  store.videoUlt[from] = { ...v, id, datos, t: Date.now() };
   await enviarBorrador(id);
+  await decir(chat, '✏️ Si quieres corregir algo, escríbemelo y rehago los textos con este mismo video.');
 };
 
 // Limpieza: reels de más de 7 días
@@ -118,6 +122,7 @@ if (cq && /^r(pub|no|ig):/.test(cq.data || '')) {
   const r = store.reels[id];
   const quitarBotones = () => tg('editMessageReplyMarkup', { chat_id: chat, message_id: cq.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
   if (!r || !r.video) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ese Reel ya no está disponible' }); await quitarBotones(); return []; }
+  if (store.videoUlt[r.from]?.id === id && accion !== 'rig') delete store.videoUlt[r.from];
   if (accion === 'rno') {
     r.estado = 'descartado';
     await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Descartado' });
@@ -204,6 +209,7 @@ if (vid) {
     const g = await paso('Telegram', tg('getFile', { file_id: vid.file_id }));
     const c = await paso('Cloudinary', post(`${CLD}/video/upload`, { file: `https://api.telegram.org/file/bot${cfg.tgToken}/${g.result.file_path}`, upload_preset: cfg.cloudinaryPreset, folder: 'reels/videos' }));
     const v = { url: c.secure_url, publicId: c.public_id, dur: c.duration || vid.duration || 0, t: Date.now() };
+    delete store.videoUlt[from];
     const datos = (m.caption || '').trim();
     if (datos) {
       await decir(chat, `🎬 Video recibido (${Math.round(v.dur)} s). Preparo los textos…`);
@@ -219,6 +225,7 @@ if (vid) {
 // Registrar fotos para el Reel (y dejarlas pasar para el flujo normal)
 const img = m.photo?.length ? m.photo[m.photo.length - 1].file_id : (m.document && /^image\//.test(m.document.mime_type || '') ? m.document.file_id : null);
 if (img) {
+  delete store.videoUlt[from];
   try {
     const g = await tg('getFile', { file_id: img });
     await post(`${CLD}/image/upload`, { file: `https://api.telegram.org/file/bot${cfg.tgToken}/${g.result.file_path}`, upload_preset: cfg.cloudinaryPreset, folder: 'reels/fotos', tags: tagReel(from) });
@@ -238,6 +245,22 @@ if (store.videoPend[from] && txt && (!txt.startsWith('/') || esListo)) {
   try { await prepararVideo(vp, esListo ? '' : txt, chat, from); }
   catch (e) { await decir(chat, `⚠️ No pude preparar los textos: ${errMsg(e)}`); }
   return [];
+}
+
+// Corrección del último borrador de video (en vez de mandarla al flujo de fotos)
+const vu = store.videoUlt[from];
+if (vu && Date.now() - vu.t > 60 * 60e3) delete store.videoUlt[from];
+if (store.videoUlt[from] && txt && !txt.startsWith('/')) {
+  const ant = store.reels[vu.id];
+  if (ant && ant.estado === 'listo') {
+    delete store.reels[vu.id]; // los botones del borrador anterior quedan sin efecto
+    await decir(chat, '✍️ Rehago los textos del mismo video con tu corrección…');
+    const datos = vu.datos ? `${vu.datos}\n\nCORRECCIÓN (tiene prioridad sobre lo anterior):\n${txt}` : txt;
+    try { await prepararVideo(vu, datos, chat, from); }
+    catch (e) { store.videoUlt[from] = vu; await decir(chat, `⚠️ No pude rehacer los textos: ${errMsg(e)}`); }
+    return [];
+  }
+  delete store.videoUlt[from];
 }
 
 // Fotos recientes del usuario (subidas a Cloudinary al recibirlas)
