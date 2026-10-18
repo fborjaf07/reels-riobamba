@@ -1,5 +1,7 @@
 // ============ REEL · va antes de "Procesar mensaje" ============
 // /reel <datos>  → arma un Reel con las fotos recientes (GitHub Actions + HyperFrames)
+// Video ya hecho → textos con Claude y borrador para aprobar
+// /reelfotos     → imágenes ya diseñadas, completas, convertidas en Reel
 // Webhook Reel   → recibe el video listo y lo envía a Telegram para aprobar
 // Botones        → ✅ publica en Instagram (Reel) y Facebook (video) · 🗑️ descarta
 // Todo lo demás pasa sin cambios a "Procesar mensaje".
@@ -22,6 +24,50 @@ const CLD = `https://api.cloudinary.com/v1_1/${cfg.cloudinaryCloud}`;
 const tagReel = (from) => `reel_${from}`;
 store.reels = store.reels || {};
 store.reelCorte = store.reelCorte || {};
+store.videoPend = store.videoPend || {};
+
+// Muestra los textos del Reel con los botones Publicar / Descartar
+const enviarBorrador = async (id) => {
+  const r = store.reels[id];
+  const dudas = (r.dudas || []).length ? `\n\n⚠️ *Revisa:*\n${r.dudas.map((d) => `• ${d}`).join('\n')}` : '';
+  const texto = `*INSTAGRAM*\n${r.instagram}\n\n*FACEBOOK*\n${r.facebook}${dudas}`.slice(0, 4000);
+  const botones = { inline_keyboard: [[{ text: '✅ Publicar Reel', callback_data: `rpub:${id}` }, { text: '🗑️ Descartar', callback_data: `rno:${id}` }]] };
+  await decir(r.chat, texto, { parse_mode: 'Markdown', reply_markup: botones })
+    .catch(() => decir(r.chat, texto.replace(/\*/g, ''), { reply_markup: botones }));
+};
+
+// Claude redacta los textos para un video o imágenes ya hechos
+const REGLAS_TEXTOS = `- Textos en español de Ecuador, dirigidos a jóvenes de 12 a 24 años, siempre con "ustedes". instagram: gancho + 60–120 palabras + 8–15 hashtags (incluye #RiobambaEnConstrucción). facebook: 80–150 palabras, máx. 3 hashtags. tiktok: máx. 150 caracteres con 3–5 hashtags.
+- No inventes cifras, fechas, nombres ni lugares: usa solo lo que se ve o lo que dicen los datos. Si algo es ambiguo o falta, anótalo en "dudas".`;
+const redactar = async (imagenes, datos, que) => {
+  const system = `${cfg.estilo || ''}
+Redactas la publicación de ${que} para las redes de la campaña "Riobamba en Construcción" (Alcaldía de la Gente de Riobamba, Dirección de Gestión de Obras Públicas). La cuadrilla de bacheo se llama "Escuadrón Panal", el equipo completo "Colmena Vial" y las "plataformas" son los sectores de la ciudad donde se atiende.
+Devuelve SOLO un objeto JSON válido, sin texto adicional: {"instagram":"...","facebook":"...","tiktok":"...","dudas":["..."]}
+${REGLAS_TEXTOS}`;
+  const pedir = (conImagenes) => {
+    const content = conImagenes ? imagenes.map((url) => ({ type: 'image', source: { type: 'url', url } })) : [];
+    content.push({ type: 'text', text: datos ? `Datos:\n${datos}` : 'No hay datos escritos: redacta solo con lo que se ve, sin suponer lugares.' });
+    return http({
+      method: 'POST', url: 'https://api.anthropic.com/v1/messages',
+      headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
+      body: { model: cfg.model || 'claude-sonnet-5', max_tokens: 2000, system, messages: [{ role: 'user', content }] },
+    });
+  };
+  let ai;
+  try { ai = await pedir(imagenes.length > 0); }
+  catch (e) { if (!datos) throw e; ai = await paso('Claude', pedir(false)); }
+  const t = (ai.content || []).map((c) => c.text || '').join('');
+  return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
+};
+
+// Video ya hecho → textos → borrador
+const prepararVideo = async (v, datos, chat, from) => {
+  const fr = (pct) => `https://res.cloudinary.com/${cfg.cloudinaryCloud}/video/upload/so_${pct}p,w_700,q_auto,f_jpg/${v.publicId}.jpg`;
+  const j = await paso('Claude', redactar([fr(15), fr(50), fr(85)], datos, 'un video (Reel) ya editado; recibes tres cuadros del video'));
+  const id = 'v' + Date.now().toString(36);
+  store.reels[id] = { t: Date.now(), chat, from, estado: 'listo', video: v.url, instagram: j.instagram, facebook: j.facebook, tiktok: j.tiktok, dudas: j.dudas || [] };
+  await enviarBorrador(id);
+};
 
 // Limpieza: reels de más de 7 días
 for (const [k, r] of Object.entries(store.reels)) if (Date.now() - (r.t || 0) > 7 * 864e5) delete store.reels[k];
@@ -44,12 +90,7 @@ if (webhook) {
   r.video = b.video_url;
   r.estado = 'listo';
   await tg('sendVideo', { chat_id: r.chat, video: r.video, supports_streaming: true, caption: `🎬 Reel listo · ${Math.round(b.duracion || 0)} s` });
-  const dudas = (r.dudas || []).length ? `\n\n⚠️ *Revisa:*\n${r.dudas.map((d) => `• ${d}`).join('\n')}` : '';
-  const texto = `*INSTAGRAM*\n${r.instagram}\n\n*FACEBOOK*\n${r.facebook}${dudas}`.slice(0, 4000);
-  await decir(r.chat, texto, {
-    parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: [[{ text: '✅ Publicar Reel', callback_data: `rpub:${b.id}` }, { text: '🗑️ Descartar', callback_data: `rno:${b.id}` }]] },
-  }).catch(() => decir(r.chat, texto.replace(/\*/g, ''), { reply_markup: { inline_keyboard: [[{ text: '✅ Publicar Reel', callback_data: `rpub:${b.id}` }, { text: '🗑️ Descartar', callback_data: `rno:${b.id}` }]] } }));
+  await enviarBorrador(b.id);
   return [];
 }
 
@@ -142,6 +183,29 @@ if (!m || !autorizado(m.from?.id)) return pasar();
 const from = String(m.from.id);
 const chat = m.chat.id;
 
+// ---------- Video ya hecho → publicarlo como Reel ----------
+const vid = m.video || (m.document && /^video\//.test(m.document.mime_type || '') ? m.document : null);
+if (vid) {
+  if ((vid.file_size || 0) > 20 * 1024 * 1024) {
+    await decir(chat, `⚠️ El video pesa ${Math.round(vid.file_size / 1048576)} MB y Telegram solo me deja bajar hasta 20 MB.\nEnvíalo como video normal (no como archivo) para que Telegram lo comprima, o recórtalo un poco.`);
+    return [];
+  }
+  try {
+    const g = await paso('Telegram', tg('getFile', { file_id: vid.file_id }));
+    const c = await paso('Cloudinary', post(`${CLD}/video/upload`, { file: `https://api.telegram.org/file/bot${cfg.tgToken}/${g.result.file_path}`, upload_preset: cfg.cloudinaryPreset, folder: 'reels/videos' }));
+    const v = { url: c.secure_url, publicId: c.public_id, dur: c.duration || vid.duration || 0, t: Date.now() };
+    const datos = (m.caption || '').trim();
+    if (datos) {
+      await decir(chat, `🎬 Video recibido (${Math.round(v.dur)} s). Preparo los textos…`);
+      await prepararVideo(v, datos, chat, from);
+    } else {
+      store.videoPend[from] = v;
+      await decir(chat, `🎬 Video recibido (${Math.round(v.dur)} s).\n\n📝 Escríbeme en un mensaje qué muestra (trabajo, lugar, plataforma…) y preparo los textos.\nSi prefieres que lo redacte solo con lo que se ve, envía /listo.`);
+    }
+  } catch (e) { await decir(chat, `⚠️ No pude preparar el video: ${errMsg(e)}`); }
+  return [];
+}
+
 // Registrar fotos para el Reel (y dejarlas pasar para el flujo normal)
 const img = m.photo?.length ? m.photo[m.photo.length - 1].file_id : (m.document && /^image\//.test(m.document.mime_type || '') ? m.document.file_id : null);
 if (img) {
@@ -153,6 +217,52 @@ if (img) {
 }
 
 const txt = (m.text || '').trim();
+
+// Descripción del video que llegó sin texto
+const vp = store.videoPend[from];
+if (vp && Date.now() - vp.t > 30 * 60e3) delete store.videoPend[from];
+if (store.videoPend[from] && txt && (!txt.startsWith('/') || /^\/listo\b/i.test(txt))) {
+  delete store.videoPend[from];
+  await decir(chat, '✍️ Preparo los textos del video…');
+  try { await prepararVideo(vp, /^\/listo\b/i.test(txt) ? '' : txt, chat, from); }
+  catch (e) { await decir(chat, `⚠️ No pude preparar los textos: ${errMsg(e)}`); }
+  return [];
+}
+
+// Fotos recientes del usuario (subidas a Cloudinary al recibirlas)
+const fotosRecientes = async () => {
+  const r = await http({ url: `${CLD}/resources/image/tags/${tagReel(from)}`, qs: { max_results: 50 }, auth: { username: cfg.cloudinaryKey, password: cfg.cloudinarySecret } });
+  const desde = Math.max(Date.now() - 48 * 3600e3, store.reelCorte[from] || 0);
+  return (r.resources || []).map((x) => ({ url: x.secure_url, t: Date.parse(x.created_at) })).filter((x) => x.t > desde).sort((a, b) => a.t - b.t);
+};
+
+// ======================= /reelfotos → imágenes ya hechas, tal cual, como Reel =======================
+if (/^\/reelfotos\b/i.test(txt)) {
+  const datosTxt = txt.replace(/^\/reelfotos(@\w+)?/i, '').trim();
+  let lista;
+  try { lista = await fotosRecientes(); } catch (e) { await decir(chat, `⚠️ No pude leer tus imágenes en Cloudinary: ${errMsg(e)}`); return []; }
+  if (!lista.length) {
+    await decir(chat, '🖼️ *Reel con imágenes ya hechas*\n1. Envía de 1 a 10 imágenes (mejor como *archivo* para que no pierdan calidad).\n2. Escribe /reelfotos y, si quieres, de qué se trata.\n\nSalen completas, sin recortar, en el orden en que las enviaste.', { parse_mode: 'Markdown' });
+    return [];
+  }
+  if (!cfg.githubToken) { await decir(chat, '⚠️ Falta configurar githubToken en el nodo Config para poder armar Reels.'); return []; }
+  const fotos = lista.slice(-10).map((x) => x.url);
+  await decir(chat, `🎬 Armando el Reel con ${fotos.length} ${fotos.length === 1 ? 'imagen' : 'imágenes'} tal cual… te aviso en unos 2 minutos.`);
+  try {
+    const j = await paso('Claude', redactar(fotos.slice(0, 6).map((u) => u.replace('/upload/', '/upload/w_700,q_auto,f_jpg/')), datosTxt, 'un Reel hecho con imágenes ya diseñadas'));
+    const id = 'd' + Date.now().toString(36);
+    await paso('GitHub', http({
+      method: 'POST', url: `https://api.github.com/repos/${REPO}/actions/workflows/reel.yml/dispatches`,
+      headers: { Authorization: `Bearer ${cfg.githubToken}`, Accept: 'application/vnd.github+json', 'User-Agent': 'n8n-reels-riobamba' },
+      body: { ref: 'main', inputs: { datos: JSON.stringify({ id, modo: 'diapositivas', fotos }), callback: WEBHOOK } },
+    }));
+    store.reels[id] = { t: Date.now(), chat, from, estado: 'armando', instagram: j.instagram, facebook: j.facebook, tiktok: j.tiktok, dudas: j.dudas || [] };
+    store.reelCorte[from] = lista[lista.length - 1].t;
+    store.corte = { ...(store.corte || {}), [from]: new Date().toISOString().replace(/\.\d+Z$/, 'Z') };
+  } catch (e) { await decir(chat, `⚠️ No pude armar el Reel: ${errMsg(e)}`); }
+  return [];
+}
+
 if (!/^\/reel\b/i.test(txt)) return pasar();
 
 // ======================= 3) /reel → armar el video =======================
@@ -162,14 +272,15 @@ const AYUDA = `🎬 *Cómo pedir un Reel*
 
 /reel Bacheo en la Plataforma M: calles México, Carabobo, Luz Elisa Borja y Av. Cordovez. Hicimos fresado, asfalto y compactación. Próxima: Plataforma C, sector Hospital Andino.
 
-En unos 3 minutos te llega el video para aprobar.`;
+En unos 3 minutos te llega el video para aprobar.
+
+🎞️ ¿Ya tienes el video hecho? Envíalo y te preparo los textos.
+🖼️ ¿Imágenes ya diseñadas? Envíalas y escribe /reelfotos.`;
 const datosTxt = txt.replace(/^\/reel(@\w+)?/i, '').trim();
 let lista = [];
 if (datosTxt) {
   try {
-    const r = await http({ url: `${CLD}/resources/image/tags/${tagReel(from)}`, qs: { max_results: 50 }, auth: { username: cfg.cloudinaryKey, password: cfg.cloudinarySecret } });
-    const desde = Math.max(Date.now() - 48 * 3600e3, store.reelCorte[from] || 0);
-    lista = (r.resources || []).map((x) => ({ url: x.secure_url, t: Date.parse(x.created_at) })).filter((x) => x.t > desde).sort((a, b) => a.t - b.t);
+    lista = await fotosRecientes();
   } catch (e) { await decir(chat, `⚠️ No pude leer tus fotos en Cloudinary: ${errMsg(e)}`); return []; }
 }
 if (!datosTxt) { await decir(chat, AYUDA, { parse_mode: 'Markdown' }); return []; }

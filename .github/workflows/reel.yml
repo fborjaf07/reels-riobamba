@@ -32,24 +32,36 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Instalar
-        run: |
-          npm ci
-          npx hyperframes browser ensure
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-
-      - name: Preparar fotos y textos
+      - name: Leer datos
+        id: modo
         env:
           REEL_DATA: ${{ inputs.datos }}
         run: |
           echo "$REEL_DATA" > datos.json
-          node -e "const d=require('./datos.json');console.log('ID:',d.id||'(sin id)')"
-          node src/construir.mjs datos.json
+          node -e "const d=require('./datos.json');console.log('ID:',d.id||'(sin id)','· modo:',d.modo||'plantilla')"
+          echo "modo=$(node -e "console.log(require('./datos.json').modo||'plantilla')")" >> "$GITHUB_OUTPUT"
+          mkdir -p salida
+
+      - name: Instalar
+        run: |
+          npm ci
+          if [ "${{ steps.modo.outputs.modo }}" != "diapositivas" ]; then npx hyperframes browser ensure; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # Reel con la plantilla "Riobamba en Construcción" (fotos de la jornada)
+      - name: Preparar fotos y textos
+        if: ${{ steps.modo.outputs.modo != 'diapositivas' }}
+        run: node src/construir.mjs datos.json
 
       - name: Renderizar
+        if: ${{ steps.modo.outputs.modo != 'diapositivas' }}
         run: |
-          mkdir -p salida
           cd plantilla && npx hyperframes render --output ../salida/bruto.mp4 --fps 30
+
+      # Reel "tal cual" con imágenes ya diseñadas
+      - name: Armar Reel tal cual
+        if: ${{ steps.modo.outputs.modo == 'diapositivas' }}
+        run: node src/diapositivas.mjs datos.json salida/bruto.mp4
 
       - name: Optimizar para Instagram, Facebook y Telegram
         run: |

@@ -54,3 +54,8 @@ cd plantilla && npx hyperframes render --output ../salida/reel.mp4
 
 - Colores, tipografías y diseño: `src/plantilla.mjs` (variables `--oscuro`, `--acento` y `--miel`).
 - Logo y video de cierre: `plantilla/assets/`.
+
+## Desde el bot: otros tipos de Reel
+
+- **Video ya hecho:** se envía el video al bot (hasta 20 MB). Si trae texto, con eso se redactan las publicaciones; si no, el bot pide una descripción (o `/listo` para redactar solo con lo que se ve). Llega el borrador con ✅ Publicar / 🗑️ Descartar.
+- **Imágenes ya diseñadas:** se envían de 1 a 10 imágenes (mejor como archivo) y luego `/reelfotos` con el tema opcional. El workflow corre en modo `diapositivas` (`src/diapositivas.mjs`): cada imagen sale completa sobre su fondo desenfocado, con zoom suave, fundidos y la música `plantilla/assets/musica-diapos.m4a`.
