@@ -20,6 +20,8 @@ const tg = (metodo, body) => http({ method: 'POST', url: `${TG}/${metodo}`, body
 const decir = (chat, text, extra = {}) => tg('sendMessage', { chat_id: chat, text, ...extra });
 const errMsg = (e) => { const d = e?.response?.data || e?.response?.body || e?.cause?.response?.data || e?.cause?.response?.body || e?.description; let t = d ? (d.error?.message || d.description || d.message || (typeof d === 'string' ? d : JSON.stringify(d))) : (e?.message || String(e)); return String(t).slice(0, 400); };
 const paso = (nombre, p) => p.catch((e) => { throw new Error(`${nombre}: ${errMsg(e)}`); });
+// Espacio de trabajo de Anthropic (la clave no está ligada a uno; el ID no es secreto)
+const ANTH_WS = cfg.anthropicWorkspace || 'wrkspc_01VpvSjvBsX7w9NihGpeWcnK';
 const CLD = `https://api.cloudinary.com/v1_1/${cfg.cloudinaryCloud}`;
 const tagReel = (from) => `reel_${from}`;
 store.reels = store.reels || {};
@@ -49,7 +51,7 @@ ${REGLAS_TEXTOS}`;
     content.push({ type: 'text', text: datos ? `Datos:\n${datos}` : 'No hay datos escritos: redacta solo con lo que se ve, sin suponer lugares.' });
     return http({
       method: 'POST', url: 'https://api.anthropic.com/v1/messages',
-      headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01', 'anthropic-workspace-id': ANTH_WS, 'content-type': 'application/json' },
       body: { model: cfg.model || 'claude-sonnet-5', max_tokens: 2000, system, messages: [{ role: 'user', content }] },
       returnFullResponse: true, ignoreHttpStatusErrors: true,
     }).then((r) => {
@@ -325,7 +327,7 @@ Reglas:
   content.push({ type: 'text', text: `Datos del día:\n${datosTxt}` });
   const ai = await paso('Claude', http({
     method: 'POST', url: 'https://api.anthropic.com/v1/messages',
-    headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
+    headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01', 'anthropic-workspace-id': ANTH_WS },
     body: { model: cfg.model || 'claude-sonnet-5', max_tokens: 3000, system, messages: [{ role: 'user', content }] },
   }));
   const t = (ai.content || []).map((c) => c.text || '').join('');
