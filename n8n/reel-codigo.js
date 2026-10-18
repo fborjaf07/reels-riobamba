@@ -49,13 +49,21 @@ ${REGLAS_TEXTOS}`;
     content.push({ type: 'text', text: datos ? `Datos:\n${datos}` : 'No hay datos escritos: redacta solo con lo que se ve, sin suponer lugares.' });
     return http({
       method: 'POST', url: 'https://api.anthropic.com/v1/messages',
-      headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01' },
+      headers: { 'x-api-key': cfg.anthropicKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: { model: cfg.model || 'claude-sonnet-5', max_tokens: 2000, system, messages: [{ role: 'user', content }] },
+      returnFullResponse: true, ignoreHttpStatusErrors: true,
+    }).then((r) => {
+      const b = typeof r.body === 'string' ? (() => { try { return JSON.parse(r.body); } catch (e) { return { error: { message: r.body } }; } })() : r.body;
+      if (r.statusCode >= 300) throw new Error(`${r.statusCode} ${b?.error?.message || JSON.stringify(b).slice(0, 300)}`);
+      return b;
     });
   };
   let ai;
   try { ai = await pedir(imagenes.length > 0); }
-  catch (e) { if (!datos) throw e; ai = await paso('Claude', pedir(false)); }
+  catch (e) {
+    if (!datos) throw e;
+    try { ai = await pedir(false); } catch (e2) { throw new Error(`${e.message} · sin imágenes: ${e2.message}`); }
+  }
   const t = (ai.content || []).map((c) => c.text || '').join('');
   return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
 };
@@ -221,10 +229,11 @@ const txt = (m.text || '').trim();
 // Descripción del video que llegó sin texto
 const vp = store.videoPend[from];
 if (vp && Date.now() - vp.t > 30 * 60e3) delete store.videoPend[from];
-if (store.videoPend[from] && txt && (!txt.startsWith('/') || /^\/listo\b/i.test(txt))) {
+const esListo = /^\/?listo[.!]*$/i.test(txt);
+if (store.videoPend[from] && txt && (!txt.startsWith('/') || esListo)) {
   delete store.videoPend[from];
   await decir(chat, '✍️ Preparo los textos del video…');
-  try { await prepararVideo(vp, /^\/listo\b/i.test(txt) ? '' : txt, chat, from); }
+  try { await prepararVideo(vp, esListo ? '' : txt, chat, from); }
   catch (e) { await decir(chat, `⚠️ No pude preparar los textos: ${errMsg(e)}`); }
   return [];
 }
